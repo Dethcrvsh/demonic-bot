@@ -3,10 +3,11 @@ import discord
 from schedule_handler import ScheduleHandler
 from discord import Client
 from discord.ext import tasks
+from dotenv import load_dotenv
 
+load_dotenv()
 
 TOKEN: str|None = os.getenv('DISCORD_TOKEN')
-TOKEN = "MTIwMTU2ODAwNTkwMjA1MzUxNg.GtTlCI.nknJfx20MtrQnZt05uhQIx72rRDudxW6aoS_BE"
 SCHEDULE_CHANNEL_ID: int = 1201567101324890252
 NOTIFICATION_CHANNEL_ID: int = 1201619083985162339
 SCHEDULE_MESSAGE_ID: int = 1201617633024422088
@@ -43,4 +44,3 @@ async def send_schedule():
 if __name__ == "__main__":
     if TOKEN is not None:
         client.run(TOKEN)
-
