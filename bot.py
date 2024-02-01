@@ -24,7 +24,7 @@ async def on_ready():
     send_schedule.start()
 
 
-@tasks.loop(minutes = 10)
+@tasks.loop(minutes = REFRESH_RATE)
 async def send_schedule():
     global last_output
 
