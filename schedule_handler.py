@@ -1,10 +1,11 @@
 from __future__ import annotations
 import requests
 import re
+import json
 from re import Match
 from requests import Response
 from requests.exceptions import HTTPError
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from dataclasses import dataclass
 
 
@@ -14,8 +15,9 @@ Handle fetching and parsing of the bands schedule from TeamUp
 
 class ScheduleHandler:
     URL_BASE: str = "https://teamup.com/kst6xmys1gryd2c54b/events?startDate={start_date}&endDate={end_date}&tz=Europe%2FStockholm"
-    SWEDISH_WEEKDAYS: list[str] = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag", "Söndag"]
-    ENTRY_RE: str = '(?<="who":"Demonic Science").*?"location":"(.*?)".*?"start_dt":"(.*?)","end_dt":"(.*?)"'
+    # How far ahead times should be checked
+    DAYS_AHEAD = 30
+    BAND_NAME: str = "Demonic Science"
 
 
     @dataclass
@@ -23,35 +25,45 @@ class ScheduleHandler:
         start: datetime
         end: datetime
         location: str
+        has_sent_notification: bool = False
+
+        def __eq__(self, other: ScheduleHandler.Entry) -> bool:
+            return (
+                self.start == other.start and
+                self.end == other.end and
+                self.location == other.location
+            )
 
 
     def __init__(self) -> None:
-        self.scheduled_times: list[int] = []
+        self.scheduled_times: list[ScheduleHandler.Entry] = []
 
 
-    def get_schedule(self) -> tuple[str, str]:
+    def get_schedule(self) -> str:
         response: str = self._request_data()
-        scheduled_times: list[ScheduleHandler.Entry] = self._get_entries(response)
 
-        new_times: list[ScheduleHandler.Entry] = self._get_new_times(scheduled_times)
+        if not response:
+            return "Could not fetch data from TeamUp."
 
-        print (self._get_notifications(new_times))
+        self._add_new_entries(response)
 
-        self.scheduled_times = scheduled_times
+        if not self.scheduled_times:
+            return "Could not parse data from TeamUp."
 
-        return self._get_formatted_schedule(scheduled_times)
+        return self._get_formatted_schedule(self.scheduled_times)
+
+
+    def get_notifications(self) -> str:
+        return self._get_new_times_notifications()
 
 
     def _create_url(self) -> str:
         """Create the url with the correct start and end dates"""
         current_date: datetime = datetime.now()
 
-        num_of_weekdays: int = 7
-        days_to_sunday: int = num_of_weekdays - current_date.weekday() - 1
-
         start_date: str = current_date.strftime("%Y-%m-%d")
         # Only fetch the schedule weekly
-        end_date = current_date + timedelta(days=days_to_sunday)
+        end_date = current_date + timedelta(days=self.DAYS_AHEAD)
 
         return self.URL_BASE.format(start_date=start_date, end_date=end_date)
 
@@ -77,50 +89,86 @@ class ScheduleHandler:
         return dt_object.replace(tzinfo=timezone.utc)
 
 
-    def _get_entries(self, response: str) -> list[int]:
+    def _add_new_entries(self, response: str):
         """Get the entries in unix time from the TeamUp response"""
-        scheduled_times: list[ScheduleHandler.Entry] = []
 
-        matches: list[Match] = re.findall(self.ENTRY_RE, response)
+        try:
+            data = json.loads(response)
+        except json.JSONDecodeError as err:
+            print(err)
+            return
 
-        for location, start, end in matches:
-            scheduled_times.append(self.Entry(
-                self._time_to_datetime(start),
-                self._time_to_datetime(end),
-                location
-            ))
+        new_scheduled_times: list[ScheduleHandler.Entry] = []
 
-        # Make sure they are sorted, they probably are already but just to be sure
-        scheduled_times.sort(key=lambda x: x.start.timestamp())
+        # Move over the existing schedules to the new ones
+        for e in data["events"]:
+            if not e["who"].lower() == self.BAND_NAME.lower():
+                continue
 
-        return scheduled_times
+            new_entry: ScheduleHandler.Entry = self.Entry(
+                self._time_to_datetime(e["start_dt"]),
+                self._time_to_datetime(e["end_dt"]),
+                e["location"]
+            )
+
+            if new_entry in self.scheduled_times:
+                new_scheduled_times += [self.scheduled_times[self.scheduled_times.index(new_entry)]]
+            else:
+                new_scheduled_times += [new_entry]
+
+        self.scheduled_times = new_scheduled_times
     
     
-    def _get_new_times(self, new_scheduled_times: list[ScheduleHandler.Entry]) -> list[ScheduleHandler.Entry]:
+    def _get_new_times_notifications(self, ) -> str:
         """Compare a new list of scheduled times to the old one and return the new ones"""
 
-        return [e for e in new_scheduled_times if e not in self.scheduled_times]
-    
-    
-    def _get_notifications(self, scheduled_times: list[ScheduleHandler.Entry]) -> str:
-        """Create notifications from newly added schedules"""
-        
-        return "".join(
-            f":exclamation: Ett nytt rep har lagts till {e.start.hour} - {e.end.hour} i {e.location}" 
-            for e in scheduled_times
-        )
+        output: str = ""
+
+        for e in self.scheduled_times:
+            if e.has_sent_notification:
+                continue
+
+            day: str = self._get_day(e.start)
+
+            output += f":exclamation: Ett nytt rep har lagts till {'på' if len(day) > 5 else 'den'} {day} i {self._get_location(e.location)}\n"
+            e.has_sent_notification = True
+
+        return output
+
+
+    def _get_day(self, date: datetime) -> str:
+        """Get the weekday or the date from a datetime depending on how much time is left"""
+
+        SWEDISH_WEEKDAYS: list[str] = [
+            "Måndag",
+            "Tisdag",
+            "Onsdag",
+            "Torsdag",
+            "Fredag",
+            "Lördag",
+            "Söndag"
+        ]
+
+        # Display the date instead of weekdays if its more than one week ahead
+        if date - datetime.now().astimezone(timezone.utc) < timedelta(weeks=1):
+            return SWEDISH_WEEKDAYS[date.weekday()] 
+        else:
+            return date.strftime("%d/%m")
+
+    def _get_location(self, location: str) -> str:
+        """Get the correctly formatted location"""
+        number: str = "".join(filter(lambda c: c.isdigit(), location))
+        return "Lokal " +  number if number else "-"
     
 
     def _get_formatted_schedule(self, scheduled_times: list[Entry]) -> str:
-        t = 3
 
-        output: str = f":star:                  REPSCHEMA V. {t}                  :star:\n\n\n"
+        output: str = f":star:                  REPSCHEMA                  :star:\n\n\n"
         
         for entry in scheduled_times:
-
-            day: str = self.SWEDISH_WEEKDAYS[entry.start.weekday()]
+            day: str = self._get_day(entry.start)
             schedule_time: str = f"{entry.start.hour} - {entry.end.hour}"
-            location: str = entry.location
+            location: str = self._get_location(entry.location)
 
             output += f":calendar_spiral: {day}         :clock4: {schedule_time}         :house: {location}\n"
         
@@ -130,10 +178,6 @@ class ScheduleHandler:
 
 
 if __name__ == "__main__":
-
-    e1 = ScheduleHandler.Entry(1, 2, "a")
-    e2 = ScheduleHandler.Entry(1, 3, "a")
-
-    print(e1 == e2)
     s = ScheduleHandler()
+    pass
 
