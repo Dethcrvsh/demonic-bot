@@ -47,9 +47,6 @@ class ScheduleHandler:
 
         self._add_new_entries(response)
 
-        if not self.scheduled_times:
-            return "Could not parse data from TeamUp."
-
         return self._get_formatted_schedule(self.scheduled_times)
 
 

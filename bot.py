@@ -13,7 +13,7 @@ NOTIFICATION_CHANNEL_ID: int = 1201619083985162339
 SCHEDULE_MESSAGE_ID: int = 1202627564888399904
 
 # How often to check for updates (in minutes)
-REFRESH_RATE: int = 10
+REFRESH_RATE: int = 30
 
 client: Client = discord.Client(intents=discord.Intents.default())
 schedule_handler: ScheduleHandler = ScheduleHandler()
